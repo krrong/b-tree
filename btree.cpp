@@ -8,7 +8,7 @@ using namespace std;
 // 참고
 // fwrite(시작주소, 파일에 쓸 byte 수, 파일에 쓸 데이터 개수, 파일 포인터)
 
-// Leaf node에 들어가는 데이터
+// Leaf node에 들어가는 데이터 --> 8byte
 class DataEntry {
 public:
 	int key;
@@ -21,7 +21,7 @@ public:
 	}
 };
 
-// Non leaf node에 들어가는 데이터
+// Non leaf node에 들어가는 데이터 --> 8byte
 class IndexEntry {
 public:
 	int key;
@@ -34,6 +34,7 @@ public:
 	}
 };
 
+// 12byte
 class Header {
 public:
 	int blockSize;	// 블록 하나의 사이즈
@@ -45,6 +46,13 @@ public:
 		this->blockSize = blockSize;
 		this->rootBID = rootBID;
 		this->depth = depth;
+	}
+
+	// 기본 생성자
+	Header() {
+		blockSize = 0;
+		rootBID = 0;
+		depth = 0;
 	}
 };
 
@@ -71,12 +79,35 @@ class NonLeafNode {
 class BTree {
 public:
 	// 멤버 변수
+	Header header;			// Header 내용 저장
 	const char* fileName;	// 파일 이름
 	int blockSize;			// 블록 사이즈
 
 	// 생성자
 	BTree(const char* fileName) {
 		this->fileName = fileName;
+		setHeader();
+	}
+
+	// creation을 제외한 command는 btree.bin을 이용하여 btree를 초기화 함
+	// --> btree.bin으로부터 btree를 만드는 과정도 필요
+	void setHeader() {
+		FILE* fp = fopen(this->fileName, "rb");
+
+		// blockSize, rootBID, depth
+		int buffer[3];
+
+		fread(buffer, sizeof(int), 3, fp);
+
+		this->header.blockSize = buffer[0];
+		this->header.rootBID = buffer[1];
+		this->header.depth = buffer[2];
+
+		cout << this->header.blockSize << endl;
+		cout << this->header.rootBID << endl;
+		cout << this->header.depth<< endl;
+
+		fclose(fp);
 	}
 
 	// file btree 생성
@@ -88,6 +119,10 @@ public:
 		}
 
 		FILE* filePointer = fopen(this->fileName, "wb");
+		if (filePointer == NULL) {
+			cout << "File Error from creation" << '\n';
+			exit(1);
+		}
 
 		// 처음 creation시 RootBID와 Depth는 0 고정
 		int RootBID = 0;
@@ -98,11 +133,17 @@ public:
 		fwrite(&RootBID, sizeof(int), 1, filePointer);
 		fwrite(&Depth, sizeof(int), 1, filePointer);
 
+		//// btree header에 읽어온 정보 저장
+		//this->header.blockSize = blockSize;
+		//this->header.rootBID = RootBID;
+		//this->header.depth = Depth;
+
 		fclose(filePointer);
 	}
 
 	// 삽입
 	bool insert(int key, int rid) {
+		// 트리가 비어있으면 루트노드 생성
 
 	}
 
@@ -121,11 +162,24 @@ public:
 
 	}
 
+	// BID를 가진 Block의 Offset 리턴 (BID block의 시작 위치)
+	int getBlockOffset(int BID) {
+		return 12 + ((BID - 1) * this->blockSize);
+	}
 
+	// 파일에 데이터 write
+	void writeData() {
+
+	}
 };
 
 vector<int> readFile(string readFileName, char command) {
 	FILE* filePointer = fopen(readFileName.c_str(), "r");
+	if (filePointer == NULL) {
+		cout << "File Error from readFile" << '\n';
+		exit(1);
+	}
+
 	char str[100];
 	string preStr;	// 마지막 행이 반복되는 것 방지위함
 	vector<int> result;	
@@ -169,7 +223,7 @@ vector<int> readFile(string readFileName, char command) {
 			}
 			preStr = token;
 
-			// 읽은 라인을 토큰화하여 벡터에 저장
+			// 읽은 라인을 토큰으로 나누어 벡터에 저장
 			while (token != NULL) {
 				result.push_back(stoi(string(token)));	// string -> int
 				token = strtok_s(NULL, ", ", &context);
@@ -194,12 +248,13 @@ int main(int argc, char* argv[]) {
 	vector<int> data;
 	string readFileName = "";
 
-	BTree* myBTree = new BTree(fileName);
 	int blockSize = 0;
+	BTree* myBTree = new BTree(fileName);
 
 	switch (command) {
 	case 'c':
 		// create index file
+		blockSize = stoi(string(argv[3]));	// argv로부터 blockSize 가져오기
 		myBTree->creation(fileName, blockSize);
 		break;
 	case 'i':
@@ -210,6 +265,7 @@ int main(int argc, char* argv[]) {
 		// 확인
 		for (int i = 0; i < data.size(); i = i + 2) {
 			cout << data[i] << ", " << data[i + 1] << endl;
+			// myBTree->insert(data[i], data[i+1]);
 		}
 		break;
 
