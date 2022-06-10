@@ -75,7 +75,9 @@ public:
 	FILE* filePointer;
 
 	// 持失切
-	BTree() {}
+	BTree(const char* fileName) {
+		this->fileName = fileName;
+	}
 
 	// file btree 持失
 	void creation(const char* fileName, int blockSize) {
@@ -129,14 +131,14 @@ public:
 //		[0]			[1]		[2]			[3]					[4] 
 int main(int argc, char* argv[]) {
 	char command = argv[1][0];
-	BTree* myBTree = new BTree();
+	const char* fileName = argv[2];
+
+	BTree* myBTree = new BTree(fileName);
+	int blockSize = 0;
 
 	switch (command) {
 	case 'c':
 		// create index file
-		int blockSize = atoi(argv[3]);
-		const char* fileName = argv[2];
-
 		myBTree->creation(fileName, blockSize);
 		break;
 
