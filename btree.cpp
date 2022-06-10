@@ -7,6 +7,7 @@ using namespace std;
 // 참고
 // fwrite(시작주소, 파일에 쓸 byte 수, 파일에 쓸 데이터 개수, 파일 포인터)
 
+// Leaf node에 들어가는 데이터
 class DataEntry {
 public:
 	int key;
@@ -19,6 +20,7 @@ public:
 	}
 };
 
+// Non leaf node에 들어가는 데이터
 class IndexEntry {
 public:
 	int key;
@@ -57,11 +59,11 @@ public:
 };
 
 class NonLeafNode {
-	int BID;						 // 다음 레벨을 가리킴
+	int NextLevelBID;				 // 다음 레벨을 가리킴
 	vector<IndexEntry> indexEntries; // non leaf node가 가지고 있는 index entry
 
 	NonLeafNode() {
-		BID = 0;
+		NextLevelBID = 0;
 	}
 };
 
@@ -70,30 +72,26 @@ public:
 	// 멤버 변수
 	const char* fileName;	// 파일 이름
 	int blockSize;			// 블록 사이즈
-	//int blockCount;			// 블록 개수
 	FILE* filePointer;
 
 	// 생성자
-	BTree(const char* fileName, int blockSize) {
-		this->fileName = fileName;
-		this->blockSize = blockSize;
-	}
+	BTree() {}
 
 	// file btree 생성
-	void creation() {
+	void creation(const char* fileName, int blockSize) {
 		// btree에 파일 이름이 초기화되어 있지 않으면 오류 발생 -> 종료
-		if (this->fileName == NULL) {
-			cout << "파일 이름이 잘못되었습니다." << '\n';
+		if (fileName == NULL) {
+			cout << "파일을 못찾았습니다." << '\n';
 			return;
 		}
-		filePointer = fopen(this->fileName, "wb");
+
+		this->filePointer = fopen(this->fileName, "wb");
 
 		// 처음 creation시 RootBID와 Depth는 0 고정
 		int RootBID = 0;
 		int Depth = 0;
-		const char* fileName = this->fileName;
 
-		// 파일에 blockSize, RootBIT, Depth 순서로 write
+		// 파일에 blockSize, RootBID, Depth 순서로 write
 		fwrite(&blockSize, sizeof(int), 1, filePointer);
 		fwrite(&RootBID, sizeof(int), 1, filePointer);
 		fwrite(&Depth, sizeof(int), 1, filePointer);
@@ -131,15 +129,15 @@ public:
 //		[0]			[1]		[2]			[3]					[4] 
 int main(int argc, char* argv[]) {
 	char command = argv[1][0];
-	const char* fileName = argv[2];
-	int blockSize = atoi(argv[3]);
-
-	BTree* myBTree = new BTree(fileName, blockSize);
+	BTree* myBTree = new BTree();
 
 	switch (command) {
 	case 'c':
 		// create index file
-		myBTree->creation();
+		int blockSize = atoi(argv[3]);
+		const char* fileName = argv[2];
+
+		myBTree->creation(fileName, blockSize);
 		break;
 
 	case 'i':
