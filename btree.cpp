@@ -1,6 +1,7 @@
 #pragma warning(disable:4996)
 #include <iostream>
 #include <vector>
+#include <stack>
 #include <cstdio>
 #include <string>
 #include <algorithm>
@@ -76,12 +77,12 @@ public:
 };
 
 // key를 기준으로 dataEntry 오름차순 정렬 (LeafNode)
-bool compareLeafNode(DataEntry* a, DataEntry* b) {
+bool compLeafNode(DataEntry* a, DataEntry* b) {
 	return a->key < b->key;
 }
 
 // key 기준으로 indexEntry 오름차순 정렬 (NonLeafNode)
-bool compareNonLeafNode(IndexEntry* a, IndexEntry* b) {
+bool compNonLeafNode(IndexEntry* a, IndexEntry* b) {
 	return a->key < b->key;
 }
 
@@ -90,12 +91,26 @@ public:
 	// 멤버 변수
 	Header header;			// Header 내용 저장
 	const char* fileName;	// 파일 이름
-	int blockSize;			// 블록 사이즈
+	int totalBlockCount;	// Btree의 총 block 개수
 
 	// 생성자
 	BTree(const char* fileName) {
 		this->fileName = fileName;
 		readHeader();
+		totalBlockCount = getTotalBlockCount();
+	}
+
+	int getTotalBlockCount() {
+		FILE* fp = fopen(this->fileName, "rb");
+
+		// size = 파일의 총 bytes
+		fseek(fp, 0, SEEK_END);
+		int size = ftell(fp);
+
+		fclose(fp);
+
+		// 파일의 총 bytes - (12(header) / blockSize) = 총 block의 수
+		return (size - 12)/this->header.blockSize;
 	}
 
 	// creation을 제외한 command는 btree.bin을 이용하여 btree를 초기화 함
@@ -107,8 +122,8 @@ public:
 		// blockSize, rootBID, depth
 		int buffer[3];
 
+		// 파일을 읽어 header수정
 		fread(buffer, sizeof(int), 3, fp);
-
 		this->header.blockSize = buffer[0];
 		this->header.rootBID = buffer[1];
 		this->header.depth = buffer[2];
@@ -159,28 +174,149 @@ public:
 	// 삽입
 	bool insert(int key, int rid) {
 		// 트리가 비어있으면 루트노드 생성
-		if (this->header.rootBID == 0) {
+  		if (this->header.rootBID == 0) {
 			this->header.rootBID = 1;	// 새로 생성 시 루트 BID = 1
 			makeNewNode(this->header.rootBID);	// 새로운 노드(루트) 생성
 			setHeader(this->header.rootBID, this->header.depth);	// btree 헤더 내용 수정
 		}
 
 		// searchKey를 포함하는 leafNode를 찾아 dataEntry추가, key기준 오름차순 정렬 -> split 필요 확인
-		LeafNode* leafNode = getLeafNode(this->header.rootBID);
+		stack<int> routeBID = searchRoute(key);
+		int updateBID = routeBID.top();
+		routeBID.pop();
+
+		LeafNode* leafNode = getLeafNode(updateBID);
 		DataEntry* newDataEntry = new DataEntry(key, rid);
 		leafNode->dataEntries.push_back(newDataEntry);
-		sort(leafNode->dataEntries.begin(), leafNode->dataEntries.end(), compareLeafNode);
+		sort(leafNode->dataEntries.begin(), leafNode->dataEntries.end(), compLeafNode);
 
-		// split필요
+		// split필요한 경우
 		if (isLeafNodeFull(leafNode)) {
+			// leafNode가 꽉 차면 leafNode split진행 --> nonLeafNode에 새로운 block insert 필요
+			IndexEntry* newIndexEntry = leafNodeSplit(leafNode, updateBID);
 
+			// 부모 노드도 split이 필요한지 root까지 올라가면서 확인하는 작업
+			while (true) {
+				// 부모 노드가 없을경우 부모 생성 후 종료
+				if (routeBID.empty()) {
+					int parentBID = getTotalBlockCount() + 1;
+					makeNewNode(parentBID);
+					this->header.depth = this->header.depth + 1;	// 부모 노드 추가 시 depth + 1
+					this->header.rootBID = parentBID;	// 부모 노드 추가 시 depth + 1
+					setHeader(parentBID, this->header.depth);	// 부모 노드 추가 시 rootNodeBID변경
+					
+					
+					// nonLeafNode 생성
+					NonLeafNode* parentNode = new NonLeafNode();
+					parentNode->NextLevelBID = updateBID;	// NextLevelBID는 split이후 왼쪽 노드를 가리킴
+					parentNode->indexEntries.push_back(newIndexEntry);	// split이후 오른쪽 노드로부터 만들어진 IndexEntry를 추가
+
+					rewriteNonLeafNode(parentBID, parentNode);
+					break;
+				}
+				// 부모가 있는 경우 2가지
+				// 1. 부모에 자리가 없어서 다시 split이 일어나는 경우
+				// 2. 부모에 자리가 있어서 삽입 가능한 경우
+				else {
+					int parentBID = routeBID.top();
+					routeBID.pop();
+
+					// 부모 노드 NonLeafNode에 split하며 생긴 IndexEntry추가 후 정렬
+					NonLeafNode* parentNonLeafNode = getNonLeafNode(parentBID);
+					parentNonLeafNode->indexEntries.push_back(newIndexEntry);
+					sort(parentNonLeafNode->indexEntries.begin(), parentNonLeafNode->indexEntries.end(), compNonLeafNode);
+
+					// 1. 부모에 자리가 없어서 다시 split이 일어나는 경우
+					if (isNonLeafNodeFull(parentNonLeafNode)) {
+						// split 이후 새로 생기는 IndexEntry
+						newIndexEntry = nonLeafNodeSplit(parentNonLeafNode, parentBID);
+						updateBID = parentBID;
+					}
+					// 2. 부모에 자리가 있어서 삽입 가능한 경우
+					else {
+						rewriteNonLeafNode(parentBID, parentNonLeafNode);
+						break;
+					}
+				}
+			}
 		}
 		else {
-			// split이 필요하지 않으면 이미 정렬된 상태이기 때문에 바로 rewirte
-			rewriteLeafNode(this->header.rootBID, leafNode);
+			// split이 필요하지 않으면 이미 정렬된 상태이기 때문에 바로 rewrite
+			rewriteLeafNode(updateBID, leafNode);
 		}
 
 		return true;
+	}
+
+	// split이후 부모노드에 추가할 IndexEnrty 반환
+	IndexEntry* leafNodeSplit(LeafNode* originLeafNode, int originLeafNodeBID) {
+		// 스플릿이 되고나면 새로운 블록 생성 entry가 나누어지고 기존 leafNode가 새로 생긴 leafNode를 가리키는 형태
+		// 파일의 가장 끝에 노드가 생성되겠지? --> Btree에서 12 + 블록사이즈 * 블록의 개수 하면 가장 끝의 offset이 나오니까 btree에 total block의 개수를 저장하자
+		
+		int newBlockID = this->totalBlockCount + 1;	// 총 block 수 증가
+		makeNewNode(newBlockID);	// 파일에 새로운 블록 0으로 write
+		LeafNode* newLeafNode = new LeafNode();	// split이후 생기는 새로운 leafNode
+
+		originLeafNode->nextLeafNode = newBlockID;	// split전 노드에서 split 이후 새로 생기는 노드로 연결
+
+		// 왼쪽 : [0 ~ dataEntries.size() / 2)
+		// 오른쪽 : [dataEntries.size() / 2 ~ dataEntries.size())
+		// 5개라면
+		// 왼쪽 0, 1, 2
+		// 오른쪽 3, 4
+		int left = originLeafNode->dataEntries.size() / 2;
+
+		// 원래 leaf에서 새로 생긴 leaf로 우측 데이터 복사
+		for (int i = left; i < originLeafNode->dataEntries.size(); i++) {
+			int key = originLeafNode->dataEntries[i]->key;
+			int value = originLeafNode->dataEntries[i]->value;
+
+			DataEntry* newDataEntry = new DataEntry(key, value);
+			newLeafNode->dataEntries.push_back(newDataEntry);
+		}
+
+		// 복사한 만큼의 데이터 삭제
+		originLeafNode->dataEntries.erase(originLeafNode->dataEntries.begin() + left, originLeafNode->dataEntries.end());
+
+		rewriteLeafNode(originLeafNodeBID, originLeafNode);	// 기존 노드 rewrite
+		rewriteLeafNode(newBlockID, newLeafNode);	// split 해서 생긴 노드 write
+
+		// split이후 부모노드에 추가할 IndexEnrty 리턴 (우측 노드의 첫 번째 key값, 우측 노드의 BID)
+		IndexEntry* newIndexEntry = new IndexEntry(newLeafNode->dataEntries[0]->key, newBlockID);
+
+		return newIndexEntry;
+	}
+
+	// split이후 부모노드에 추가할 IndexEntry 반환
+	IndexEntry* nonLeafNodeSplit(NonLeafNode* originNonLeafNode, int originNonLeafNodeBID) {
+		// 스플릿이 되고나면 새로운 블록 생성 entry가 나누어지고 상위 노드로 IndexEntry 삽입
+		// 파일의 가장 끝에 노드가 생성될 것
+		
+		int newBlockBID = this->totalBlockCount + 1;	// 총 block 수 증가
+		makeNewNode(newBlockBID);	// 파일에 새로운 블록 0으로 write
+		NonLeafNode* newNonLeafNode = new NonLeafNode();	// split이후 생기는 새로운 nonLeafNode
+
+		int left = originNonLeafNode->indexEntries.size() / 2;
+
+		// 원래 nonLeafNode에서 새로 생긴 nonLeafNode로 데이터 복사 (우측 절반 - 1)
+		for (int i = left + 1; originNonLeafNode->indexEntries.size(); i++) {
+			int key = originNonLeafNode->indexEntries[i]->key;
+			int bid = originNonLeafNode->indexEntries[i]->BID;
+
+			IndexEntry* newIndexEntry = new IndexEntry(key, bid);
+			newNonLeafNode->indexEntries.push_back(newIndexEntry);
+		}
+
+		// 우측에서 첫 번째 key값과 우측 BID는 부모로 올라가는 IndexEntry
+		IndexEntry* newIndexEntry = new IndexEntry(originNonLeafNode->indexEntries[left]->key, newBlockBID);
+
+		// 복사한만큼의 데이터 삭제
+		originNonLeafNode->indexEntries.erase(originNonLeafNode->indexEntries.begin() + left, originNonLeafNode->indexEntries.end());
+
+		rewriteNonLeafNode(originNonLeafNodeBID, originNonLeafNode);	// 기존 노드 rewrite
+		rewriteNonLeafNode(newBlockBID, newNonLeafNode);	// split 해서 생긴 노드 rewrite
+
+		return newIndexEntry;
 	}
 
 	// BID와 LeafNode를 인자로 받아 파일에 rewrite
@@ -193,6 +329,16 @@ public:
 		// 처음부터 block의 시작 위치까지 커서 이동
 		fseek(fp, blockOffset, SEEK_SET);
 
+		// 파일에 0으로 쓰기 위함
+		int bufferByte = getNodeSize();
+		int* buffer = new int[bufferByte]();
+
+		// blockOffset위치부터 nodeSize만큼 0으로 write --> rewrite 하기 위한 사전 준비
+		fwrite(buffer, sizeof(int), bufferByte, fp);
+
+		// fwrite을 하면 커서가 이동되기 때문에 다시 제위치로 이동
+		fseek(fp, blockOffset, SEEK_SET);
+
 		// leafNode의 dataEntry write
 		for (int i = 0; i < leafNode->dataEntries.size(); i++) {
 			int key = leafNode->dataEntries[i]->key;
@@ -202,6 +348,9 @@ public:
 			fwrite(&key, sizeof(int), 1, fp);
 			fwrite(&value, sizeof(int), 1, fp);
 		}
+
+		// leafNode의 nextLeafNode 위치로 이동
+		fseek(fp, blockOffset + this->header.blockSize - 4, SEEK_SET);
 
 		// leafNode의 nextLeafNode write
 		int nextLeafNode = leafNode->nextLeafNode;
@@ -220,6 +369,16 @@ public:
 		// 처음부터 block의 시작 위치까지 커서 이동
 		fseek(fp, blockOffset, SEEK_SET);
 
+		// 파일에 0으로 쓰기 위함
+		int bufferByte = getNodeSize();
+		int* buffer = new int[bufferByte]();
+
+		// blockOffset위치부터 nodeSize만큼 0으로 write --> rewrite 하기 위한 사전 준비
+		fwrite(buffer, sizeof(int), bufferByte, fp);
+		
+		// fwrite을 하면 커서가 이동되기 때문에 다시 제위치로 이동
+		fseek(fp, blockOffset, SEEK_SET);
+
 		// nextLevelBID write
 		int NextLevelBID = nonLeafNode->NextLevelBID;
 		fwrite(&NextLevelBID, sizeof(int), 1, fp);
@@ -234,15 +393,20 @@ public:
 			fwrite(&BID, sizeof(int), 1, fp);
 		}
 
+		// leafNode의 nextLeafNode 위치로 이동
+		fseek(fp, blockOffset + this->header.blockSize - 4, SEEK_SET);
+
 		fclose(fp);
 	}
 
 	// searchKey를 통해 block search
-	//  --> searchKey 범위를 가지고 있는 block의 BID 리턴
-	int searchBlock(int searchKey) {
+	//  --> searchKey 범위를 가지고 있는 block를 찾아가는 route의 BID리턴
+	stack<int> searchRoute(int searchKey) {
+		stack<int> result;
 		int curBID = this->header.rootBID;
 		int totalDepth = this->header.depth;
 		int curDepth = 0;
+		result.push(curBID);	// root 노드만 존재할 때 while문을 타지 않음
 
 		// 루트부터 key를 가지고 있는 노드 탐색
 		while (totalDepth != curDepth) {
@@ -270,6 +434,7 @@ public:
 					curBID = nextBID;
 					curDepth++;
 					searchFlag = true;
+					result.push(curBID);
 					break;
 				}
 				// searchKey가 더 크면 오른쪽으로 이동
@@ -278,10 +443,11 @@ public:
 			if (searchFlag == false) {
 				curBID = curNonLeafNode->indexEntries.back()->BID;
 				curDepth++;
+				result.push(curBID);
 			}
 		}
 
-		return curBID;
+		return result;
 	}
 
 	// 파일에 데이터 write
@@ -392,7 +558,7 @@ public:
 
 	// blockID 가 BID인 Block의 시작 위치 리턴
 	int getBlockOffset(int BID) {
-		return 12 + ((BID - 1) * this->blockSize);
+		return 12 + ((BID - 1) * this->header.blockSize);
 	}
 
 	// 새로운 노드 생성 -> 파일의 지정된 위치에 nodeSize만큼을 0으로 write
@@ -409,6 +575,9 @@ public:
 
 		// blockOffset위치부터 nodeSize만큼 0으로 write
 		fwrite(buffer, sizeof(int), bufferByte, fp);
+
+		// 블록 개수 증가
+		this->totalBlockCount++;
 
 		delete[] buffer;
 		fclose(fp);
