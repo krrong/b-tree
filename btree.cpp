@@ -3,10 +3,8 @@
 #include <vector>
 #include <cstdio>
 #include <string>
+#include <algorithm>
 using namespace std;
-
-// 참고
-// fwrite(시작주소, 파일에 쓸 byte 수, 파일에 쓸 데이터 개수, 파일 포인터)
 
 // Leaf node에 들어가는 데이터 --> 8byte
 class DataEntry {
@@ -77,6 +75,16 @@ public:
 	}
 };
 
+// key를 기준으로 dataEntry 오름차순 정렬 (LeafNode)
+bool compareLeafNode(DataEntry* a, DataEntry* b) {
+	return a->key < b->key;
+}
+
+// key 기준으로 indexEntry 오름차순 정렬 (NonLeafNode)
+bool compareNonLeafNode(IndexEntry* a, IndexEntry* b) {
+	return a->key < b->key;
+}
+
 class BTree {
 public:
 	// 멤버 변수
@@ -91,7 +99,8 @@ public:
 	}
 
 	// creation을 제외한 command는 btree.bin을 이용하여 btree를 초기화 함
-	// --> btree.bin으로부터 btree를 만드는 과정도 필요
+	//  --> btree.bin으로부터 btree를 만드는 과정도 필요
+	// btree.bin파일로부터 btree의 header구성
 	void readHeader() {
 		FILE* fp = fopen(this->fileName, "r+b");	// 파일을 binary 형태로 읽고 쓸 수 있도록 open
 
@@ -107,14 +116,14 @@ public:
 		fclose(fp);
 	}
 
-	// 인자로 받은 rootBID와 depth를 파일에 다시 작성
+	// 인자로 받은 rootBID와 depth를 btree.bin 파일 header 부분에 다시 작성
 	void setHeader(int rootBID, int depth) {
 		FILE* fp = fopen(this->fileName, "r+b");	// 파일을 binary 형태로 읽고 쓸 수 있도록 open
 
 		// rootBID가 있는 곳으로 커서 이동
 		fseek(fp, sizeof(int), SEEK_SET);
 
-		// 
+		// rootBID, depth write
 		fwrite(&rootBID, sizeof(int), 1, fp);
 		fwrite(&depth, sizeof(int), 1, fp);
 
@@ -152,16 +161,84 @@ public:
 		// 트리가 비어있으면 루트노드 생성
 		if (this->header.rootBID == 0) {
 			this->header.rootBID = 1;	// 새로 생성 시 루트 BID = 1
-			makeNewNode(this->header.rootBID);
-			setHeader(this->header.rootBID, this->header.depth);
+			makeNewNode(this->header.rootBID);	// 새로운 노드(루트) 생성
+			setHeader(this->header.rootBID, this->header.depth);	// btree 헤더 내용 수정
 		}
-		
-		writeData(this->header.rootBID, key, rid);
+
+		// searchKey를 포함하는 leafNode를 찾아 dataEntry추가, key기준 오름차순 정렬 -> split 필요 확인
+		LeafNode* leafNode = getLeafNode(this->header.rootBID);
+		DataEntry* newDataEntry = new DataEntry(key, rid);
+		leafNode->dataEntries.push_back(newDataEntry);
+		sort(leafNode->dataEntries.begin(), leafNode->dataEntries.end(), compareLeafNode);
+
+		// split필요
+		if (isLeafNodeFull(leafNode)) {
+
+		}
+		else {
+			// split이 필요하지 않으면 이미 정렬된 상태이기 때문에 바로 rewirte
+			rewriteLeafNode(this->header.rootBID, leafNode);
+		}
 
 		return true;
 	}
 
-	// Key를 가지고 있는 block search
+	// BID와 LeafNode를 인자로 받아 파일에 rewrite
+	void rewriteLeafNode(int BID, LeafNode* leafNode) {
+		// BID의 시작 위치 반환
+		int blockOffset = getBlockOffset(BID);
+
+		FILE* fp = fopen(this->fileName, "r+b");
+
+		// 처음부터 block의 시작 위치까지 커서 이동
+		fseek(fp, blockOffset, SEEK_SET);
+
+		// leafNode의 dataEntry write
+		for (int i = 0; i < leafNode->dataEntries.size(); i++) {
+			int key = leafNode->dataEntries[i]->key;
+			int value = leafNode->dataEntries[i]->value;
+
+			// file에 write
+			fwrite(&key, sizeof(int), 1, fp);
+			fwrite(&value, sizeof(int), 1, fp);
+		}
+
+		// leafNode의 nextLeafNode write
+		int nextLeafNode = leafNode->nextLeafNode;
+		fwrite(&nextLeafNode, sizeof(int), 1, fp);
+
+		fclose(fp);
+	}
+
+	// BID와 NonLeafNode를 인자로 받아 파일에 rewrite
+	void rewriteNonLeafNode(int BID, NonLeafNode* nonLeafNode) {
+		// BID의 시작 위치 반환
+		int blockOffset = getBlockOffset(BID);
+
+		FILE* fp = fopen(this->fileName, "r+b");
+
+		// 처음부터 block의 시작 위치까지 커서 이동
+		fseek(fp, blockOffset, SEEK_SET);
+
+		// nextLevelBID write
+		int NextLevelBID = nonLeafNode->NextLevelBID;
+		fwrite(&NextLevelBID, sizeof(int), 1, fp);
+
+		// nonLeafNode의 indexEntry write
+		for (int i = 0; i < nonLeafNode->indexEntries.size(); i++) {
+			int key = nonLeafNode->indexEntries[i]->key;
+			int BID = nonLeafNode->indexEntries[i]->BID;
+
+			// file에 write
+			fwrite(&key, sizeof(int), 1, fp);
+			fwrite(&BID, sizeof(int), 1, fp);
+		}
+
+		fclose(fp);
+	}
+
+	// searchKey를 통해 block search
+	//  --> searchKey 범위를 가지고 있는 block의 BID 리턴
 	int searchBlock(int searchKey) {
 		int curBID = this->header.rootBID;
 		int totalDepth = this->header.depth;
@@ -209,17 +286,14 @@ public:
 
 	// 파일에 데이터 write
 	void writeData(int BID, int key, int value) {
-		FILE* fp = fopen(this->fileName, "r+b");
+		FILE* fp = fopen(this->fileName, "r+b");	// 파일을 binary 형태로 읽고 쓸 수 있도록 open
 
 		// 처음부터 block의 시작 위치까지 커서 이동
 		int blockOffset = getBlockOffset(BID);
 		fseek(fp, blockOffset, SEEK_SET);
 
-		int k = key;
-		int v = value;
-
-		fwrite(&k, sizeof(int), 1, fp);
-		fwrite(&v, sizeof(int), 1, fp);
+		fwrite(&key, sizeof(int), 1, fp);
+		fwrite(&value, sizeof(int), 1, fp);
 
 		fclose(fp);
 	}
@@ -227,13 +301,13 @@ public:
 	// Node에 Entry는 (blockSize - 4) / 8 개 만큼 들어갈 수 있음
 	// true면 split 필요
 	bool isLeafNodeFull(LeafNode* leafNode) {
-		return leafNode->dataEntries.size() > (this->blockSize - 4) / 8;
+		return leafNode->dataEntries.size() > ((this->header.blockSize - 4) / 8);
 	}
 
 	// Node에 Entry는 (blockSize - 4) / 8 개 만큼 들어갈 수 있음
 	// true면 split 필요
 	bool isNonLeafNodeFull(NonLeafNode* nonLeafNode) {
-		return nonLeafNode->indexEntries.size() > (this->blockSize - 4) / 8;
+		return nonLeafNode->indexEntries.size() > (this->header.blockSize - 4) / 8;
 	}
 
 	// [(key, value), (key, value), ..., nextBID]
@@ -410,6 +484,8 @@ vector<int> readFile(string readFileName, char command) {
 	return result;
 }
 
+
+
 // input example
 // 1. btree.exe		c	btree.bin		36
 // 2. btree.exe		i	btree.bin		insert.txt
@@ -434,16 +510,14 @@ int main(int argc, char* argv[]) {
 		break;
 	case 'i':
 		// insert records from [records data file], ex) records.txt
-		//readFileName = argv[3];
-		//data = readFile(readFileName, command);
+		readFileName = argv[3];
+		data = readFile(readFileName, command);
 
-		//// 확인
-		//for (int i = 0; i < data.size(); i = i + 2) {
-		//	cout << data[i] << ", " << data[i + 1] << endl;
-		//	// myBTree->insert(data[i], data[i+1]);
-		//}
-
-		myBTree->insert(1,2);
+		// 확인
+		for (int i = 0; i < data.size(); i = i + 2) {
+			//cout << data[i] << ", " << data[i + 1] << endl;
+			 myBTree->insert(data[i], data[i+1]);
+		}
 		break;
 
 	case 's':
