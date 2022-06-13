@@ -562,8 +562,41 @@ public:
 	}
 
 	// point search
-	pair<int, int> pointSearch(int key) {
+	void pointSearch(int searchKey, string writeFileName) {
+		FILE* fp;
+		fp = fopen(writeFileName.c_str(), "a+b");
 
+		LeafNode* leafNode = new LeafNode();
+		stack<int> routeBID = searchRoute(searchKey);	// key를 이용하여 root부터 leaf까지 BID를 가진 스택 리턴
+
+		// 가장 마지막에 있는 원소가 leafNode의 BID
+		int leafNodeKey = routeBID.top();
+		routeBID.pop();
+
+		// BID를 이용하여 leafNode 리턴
+		leafNode = getLeaf(leafNodeKey);
+
+		int key = -1;
+		int value = -1;
+		string comma = ",";
+		string enter = "\n";
+
+		// leafNode의 DataEntry의 key와 searchKey를 비교해가면서 같은 값 나오면 파일에 바로 write (중복된 값이 없다고 가정)
+		for (int i = 0; i < leafNode->dataEntries.size(); i++) {
+			if (searchKey == leafNode->dataEntries[i]->key) {
+				key = leafNode->dataEntries[i]->key;
+				value = leafNode->dataEntries[i]->value;
+
+				fseek(fp, 0, SEEK_END);
+
+				fputs(to_string(key).c_str(), fp);
+				fputs(comma.c_str(), fp);
+				fputs(to_string(value).c_str(), fp);
+				fputs(enter.c_str(), fp);
+			}
+		}
+
+		fclose(fp);
 	}
 
 	// range search
@@ -679,9 +712,10 @@ vector<int> readFile(string readFileName, char command) {
 //	[0]		[1]		[2]		[3]		[4] 
 int main(int argc, char* argv[]) {
 	char command = argv[1][0];
-	const char* fileName = argv[2];
-	vector<int> data;
-	string readFileName = "";
+	const char* fileName = argv[2];	// btree.bin
+	vector<int> data;	// 읽어온 데이터를 저장할 벡터
+	string readFileName = "";		// read할 파일명
+	string writeFileName = "";		// search 결과를 적을 파일명
 
 	int blockSize = 0;
 	BTree* myBTree = new BTree(fileName);
@@ -707,11 +741,13 @@ int main(int argc, char* argv[]) {
 	case 's':
 		// search keys in [input file] and print results to [output file]
 		readFileName = argv[3];
+		writeFileName = argv[4];		// search 결과를 적을 파일명
+
 		data = readFile(readFileName, command);
 
 		// 확인
 		for (int i = 0; i < data.size(); i = i++) {
-			cout << data[i] << endl;
+			myBTree->pointSearch(data[i], writeFileName);
 		}
 		break;
 
