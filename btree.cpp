@@ -556,9 +556,84 @@ public:
 		return nonLeafNode;
 	}
 
-	// 출력
-	void print() {
+	// 레벨 1, 2출력
+	void print(string writeFileName) {
+		FILE* fp = fopen(writeFileName.c_str(), "w+b");
 
+		int rootBID = this->header.rootBID;
+		NonLeafNode* rootNode = getNonLeaf(rootBID);
+
+		string level0 = "[level 0]\n";
+		string level1 = "[level 1]\n";
+		string enter = "\n";
+		string comma = ",";
+
+		// level0 write
+		fputs(level0.c_str(), fp);
+		for (int i = 0; i < rootNode->indexEntries.size(); i++) {
+			// 마지막에는 "," 제외
+			if (i + 1 == rootNode->indexEntries.size()) {
+				int key = rootNode->indexEntries[i]->key;
+				fputs(to_string(key).c_str(), fp);
+			}
+			else {
+				int key = rootNode->indexEntries[i]->key;
+				fputs(to_string(key).c_str(), fp);
+				fputs(comma.c_str(), fp);
+			}
+		}
+		fputs(enter.c_str(), fp);
+		fputs(enter.c_str(), fp);
+
+		// level1 write
+		fputs(level1.c_str(), fp);
+
+		int nextBID = 0;
+		LeafNode* leafNode;
+		NonLeafNode* nonLeafNode;
+		
+		// depth가 2인 경우 level1노드는 leafNode
+		if (this->header.depth == 1) {
+			for (int i = 0; i < rootNode->indexEntries.size(); i++) {
+				// i가 첫 번째면 nextBID는 nonLeafNode가 가지고 있는 BID
+				if (i == 0) {
+					nextBID = rootNode->NextLevelBID;
+				}
+				else {
+					nextBID = rootNode->indexEntries[i]->BID;
+				}
+
+				leafNode = getLeaf(nextBID);
+				for (int i = 0; i < leafNode->dataEntries.size(); i++) {
+					int key = leafNode->dataEntries[i]->key;
+					fputs(to_string(key).c_str(), fp);
+					fputs(comma.c_str(), fp);
+				}
+			}
+		}
+		// 2보다 깊은 경우 level1노드는 nonLeafNode
+		else if (this->header.depth > 1) {
+			for (int i = 0; i < rootNode->indexEntries.size() + 1; i++) {
+				// i가 첫 번째면 nextBID는 nonLeafNode가 가지고 있는 BID
+				if (i == 0) {
+					nextBID = rootNode->NextLevelBID;
+				}
+				else {
+					nextBID = rootNode->indexEntries[i-1]->BID;
+				}
+
+				nonLeafNode = getNonLeaf(nextBID);
+				for (int i = 0; i < nonLeafNode->indexEntries.size(); i++) {
+					int key = nonLeafNode->indexEntries[i]->key;
+					fputs(to_string(key).c_str(), fp);
+					fputs(comma.c_str(), fp);
+				}
+			}
+		}
+		else {
+
+		}
+		fclose(fp);
 	}
 
 	// point search
@@ -587,8 +662,7 @@ public:
 				key = leafNode->dataEntries[i]->key;
 				value = leafNode->dataEntries[i]->value;
 
-				fseek(fp, 0, SEEK_END);
-
+				// (key, value\n) 형태로 파일에 write
 				fputs(to_string(key).c_str(), fp);
 				fputs(comma.c_str(), fp);
 				fputs(to_string(value).c_str(), fp);
@@ -600,8 +674,57 @@ public:
 	}
 
 	// range search
-	int rangeSearch(int startRange, int endRange) {
+	void rangeSearch(int startRange, int endRange, string writeFileName) {
+		FILE* fp;
+		fp = fopen(writeFileName.c_str(), "a+b");
 
+		LeafNode* leafNode = new LeafNode();
+		stack<int> routeBID = searchRoute(startRange);	// key를 이용하여 root부터 leaf까지 BID를 가진 스택 리턴
+
+		// 가장 마지막에 있는 원소가 leafNode의 BID
+		int leafNodeKey = routeBID.top();
+		routeBID.pop();
+
+		// BID를 이용하여 leafNode 리턴
+		leafNode = getLeaf(leafNodeKey);
+
+		int key = -1;
+		int value = -1;
+		string comma = ",";
+		string enter = "\n";
+		string slash = " / ";
+		
+		bool stopFlag = true;
+
+		while (stopFlag) {
+			// 현재 리프노드에서 탐색
+			// leafNode의 DataEntry의 key와 startRange를 비교해가면서 startRange보다 큰 값이 나오면 파일에 바로 write (없는 키 값이 있을 수 있음)
+			for (int i = 0; i < leafNode->dataEntries.size(); i++) {
+				// endPoint보다 크면 "\n" 입력 후 탐색 종료
+				if (endRange < leafNode->dataEntries[i]->key) {
+					fputs(enter.c_str(), fp);
+					return;
+				}
+				
+				// endPoint보다 작지만 startPoint보다 크면 파일에 write
+				if (startRange <= leafNode->dataEntries[i]->key) {
+					
+					key = leafNode->dataEntries[i]->key;
+					value = leafNode->dataEntries[i]->value;
+
+					fputs(to_string(key).c_str(), fp);
+					fputs(comma.c_str(), fp);
+					fputs(to_string(value).c_str(), fp);
+					fputs(slash.c_str(), fp);
+				}
+			}
+			// 다음 리프노드에서 탐색
+			int nextBID = leafNode->nextLeafNode;	
+			leafNode = getLeaf(nextBID);
+		}
+		
+
+		fclose(fp);
 	}
 
 	// blockID 가 BID인 Block의 시작 위치 리턴
@@ -731,7 +854,7 @@ int main(int argc, char* argv[]) {
 		readFileName = argv[3];
 		data = readFile(readFileName, command);
 
-		// 확인
+		// 삽입
 		for (int i = 0; i < data.size(); i = i + 2) {
 			//cout << data[i] << ", " << data[i + 1] << endl;
 			 myBTree->insert(data[i], data[i+1]);
@@ -745,7 +868,7 @@ int main(int argc, char* argv[]) {
 
 		data = readFile(readFileName, command);
 
-		// 확인
+		// point search
 		for (int i = 0; i < data.size(); i = i++) {
 			myBTree->pointSearch(data[i], writeFileName);
 		}
@@ -754,16 +877,21 @@ int main(int argc, char* argv[]) {
 	case 'r':
 		// search keys in [input file] and print results to [output file]
 		readFileName = argv[3];
+		writeFileName = argv[4];		// search 결과를 적을 파일명
+
 		data = readFile(readFileName, command);
 
-		// 확인
+		// range search
 		for (int i = 0; i < data.size(); i = i + 2) {
-			cout << data[i] << ", " << data[i + 1] << endl;
+			myBTree->rangeSearch(data[i], data[i + 1], writeFileName);
 		}
 		break;
 
 	case 'p':
 		// print B+-tree structure to [output file]
+		writeFileName = argv[3];		// print할 파일명
+
+		myBTree->print(writeFileName);
 		break;
 	}
  }
