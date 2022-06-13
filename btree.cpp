@@ -101,7 +101,11 @@ public:
 	}
 
 	int getTotalBlockCount() {
-		FILE* fp = fopen(this->fileName, "rb");
+		FILE* fp = fopen(this->fileName, "r+b");
+
+		if (fp == NULL) {
+			return -1;
+		}
 
 		// size = 파일의 총 bytes
 		fseek(fp, 0, SEEK_END);
@@ -109,8 +113,13 @@ public:
 
 		fclose(fp);
 
+		// btree.bin 의 blockSize가 0이면 -1 리턴
+		if (this->header.blockSize == 0) {
+			return -1;
+		}
+
 		// 파일의 총 bytes - (12(header) / blockSize) = 총 block의 수
-		return (size - 12)/this->header.blockSize;
+		return (size - 12) / this->header.blockSize;
 	}
 
 	// creation을 제외한 command는 btree.bin을 이용하여 btree를 초기화 함
@@ -118,6 +127,10 @@ public:
 	// btree.bin파일로부터 btree의 header구성
 	void readHeader() {
 		FILE* fp = fopen(this->fileName, "r+b");	// 파일을 binary 형태로 읽고 쓸 수 있도록 open
+
+		if (fp == NULL) {
+			return;
+		}
 
 		// blockSize, rootBID, depth
 		int buffer[3];
@@ -185,7 +198,7 @@ public:
 		int updateBID = routeBID.top();
 		routeBID.pop();
 
-		LeafNode* leafNode = getLeafNode(updateBID);
+   		LeafNode* leafNode = getLeafNode(updateBID);
 		DataEntry* newDataEntry = new DataEntry(key, rid);
 		leafNode->dataEntries.push_back(newDataEntry);
 		sort(leafNode->dataEntries.begin(), leafNode->dataEntries.end(), compLeafNode);
@@ -299,7 +312,7 @@ public:
 		int left = originNonLeafNode->indexEntries.size() / 2;
 
 		// 원래 nonLeafNode에서 새로 생긴 nonLeafNode로 데이터 복사 (우측 절반 - 1)
-		for (int i = left + 1; originNonLeafNode->indexEntries.size(); i++) {
+		for (int i = left + 1; i < originNonLeafNode->indexEntries.size(); i++) {
 			int key = originNonLeafNode->indexEntries[i]->key;
 			int bid = originNonLeafNode->indexEntries[i]->BID;
 
@@ -547,12 +560,12 @@ public:
 	}
 
 	// point search
-	int* search(int key) {
+	pair<int, int> pointSearch(int key) {
 
 	}
 
 	// range search
-	int* search(int startRange, int endRange) {
+	int rangeSearch(int startRange, int endRange) {
 
 	}
 
