@@ -198,7 +198,7 @@ public:
 		int updateBID = routeBID.top();
 		routeBID.pop();
 
-   		LeafNode* leafNode = getLeafNode(updateBID);
+   		LeafNode* leafNode = getLeaf(updateBID);
 		DataEntry* newDataEntry = new DataEntry(key, rid);
 		leafNode->dataEntries.push_back(newDataEntry);
 		sort(leafNode->dataEntries.begin(), leafNode->dataEntries.end(), compLeafNode);
@@ -235,7 +235,7 @@ public:
 					routeBID.pop();
 
 					// 부모 노드 NonLeafNode에 split하며 생긴 IndexEntry추가 후 정렬
-					NonLeafNode* parentNonLeafNode = getNonLeafNode(parentBID);
+					NonLeafNode* parentNonLeafNode = getNonLeaf(parentBID);
 					parentNonLeafNode->indexEntries.push_back(newIndexEntry);
 					sort(parentNonLeafNode->indexEntries.begin(), parentNonLeafNode->indexEntries.end(), compNonLeafNode);
 
@@ -256,8 +256,8 @@ public:
 		else {
 			// split이 필요하지 않으면 이미 정렬된 상태이기 때문에 바로 rewrite
 			rewriteLeafNode(updateBID, leafNode);
+			return true;
 		}
-
 		return true;
 	}
 
@@ -270,6 +270,7 @@ public:
 		makeNewNode(newBlockID);	// 파일에 새로운 블록 0으로 write
 		LeafNode* newLeafNode = new LeafNode();	// split이후 생기는 새로운 leafNode
 
+		newLeafNode->nextLeafNode = originLeafNode->nextLeafNode;	// 원래 node가 가리키던 nextBID를 split 이후 새로 생기는 노드의 nextBID에 넣어줌
 		originLeafNode->nextLeafNode = newBlockID;	// split전 노드에서 split 이후 새로 생기는 노드로 연결
 
 		// 왼쪽 : [0 ~ dataEntries.size() / 2)
@@ -310,6 +311,7 @@ public:
 		NonLeafNode* newNonLeafNode = new NonLeafNode();	// split이후 생기는 새로운 nonLeafNode
 
 		int left = originNonLeafNode->indexEntries.size() / 2;
+		newNonLeafNode->NextLevelBID = originNonLeafNode->indexEntries[left]->BID;	// split하여 생기는 nonleafnode에 nextLevelBID를 나누어지는 첫 번째 BID로 삽입
 
 		// 원래 nonLeafNode에서 새로 생긴 nonLeafNode로 데이터 복사 (우측 절반 - 1)
 		for (int i = left + 1; i < originNonLeafNode->indexEntries.size(); i++) {
@@ -423,7 +425,7 @@ public:
 
 		// 루트부터 key를 가지고 있는 노드 탐색
 		while (totalDepth != curDepth) {
-			NonLeafNode* curNonLeafNode = getNonLeafNode(curBID);	// BID를 가지고 NonLeafNode 읽어옴
+			NonLeafNode* curNonLeafNode = getNonLeaf(curBID);	// BID를 가지고 NonLeafNode 읽어옴
 			bool searchFlag = false;
 
 			// NonLeafNode : [nextBID, (key, value), (key, value)...]
@@ -491,7 +493,7 @@ public:
 
 	// [(key, value), (key, value), ..., nextBID]
 	// BID의 blockOffset에서부터 LeafNode Size만큼 읽어옴
-	LeafNode* getLeafNode(int BID) {
+	LeafNode* getLeaf(int BID) {
 		int bufferSize = getNodeSize();		
 		int* buffer = new int[bufferSize]();	// 0으로 초기화
 		int blockOffset = getBlockOffset(BID);
@@ -524,7 +526,7 @@ public:
 
 	// [nextBID, (key, value), (key, value), ...]
 	// BID의 blockOffset에서부터 LeafNode Size만큼 읽어옴
-	NonLeafNode* getNonLeafNode(int BID) {
+	NonLeafNode* getNonLeaf(int BID) {
 		int bufferSize = getNodeSize();
 		int* buffer = new int[bufferSize]();	// 0으로 초기화
 		int blockOffset = getBlockOffset(BID);
