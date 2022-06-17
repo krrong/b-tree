@@ -65,7 +65,7 @@ e.g., btree.exe s Btree.bin search.txt result.txt
 
 
 The result of search operation, “result.txt” should have “Keys” in the following format : 
-![](2022-06-17-21-36-23.png)
+<img src="2022-06-17-21-36-23.png">
 
 
 ### 4. Print B+-Tree (print the root node and its child nodes only, i.e., top-2 levels only)
