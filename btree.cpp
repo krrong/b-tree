@@ -86,6 +86,68 @@ bool compNonLeafNode(IndexEntry* a, IndexEntry* b) {
 	return a->key < b->key;
 }
 
+vector<int> readFile(string readFileName, char command) {
+	FILE* filePointer = fopen(readFileName.c_str(), "r");
+	if (filePointer == NULL) {
+		cout << "File Error from readFile" << '\n';
+		exit(1);
+	}
+
+	char str[100];
+	string preStr;	// 마지막 행이 반복되는 것 방지위함
+	vector<int> result;
+
+	// point search는 한 라인에 하나의 숫자가 있어 분할 필요 X
+	if (command == 's') {
+		while (feof(filePointer) == 0) {
+			fgets(str, 100, filePointer);
+
+			// 개행문자 제거
+			if (str[strlen(str) - 1] == '\n') {
+				str[strlen(str) - 1] = '\0';
+			}
+
+			// 입력이 없으면 종료
+			if (str[0] == '\0') {
+				break;
+			}
+
+			// 읽은 라인을 벡터에 저장
+			result.push_back(stoi(string(str)));	// string -> int
+		}
+	}
+	// range search와 insertion은 한 라인에 두 개의 숫자가 있어 분할 필요
+	else {
+		// 파일 포인터가 파일의 끝이 아닐 때 계속 반복
+		while (feof(filePointer) == 0) {
+			fgets(str, 100, filePointer);
+
+			// 개행문자 제거
+			if (str[strlen(str) - 1] == '\n') {
+				str[strlen(str) - 1] = '\0';
+			}
+
+			char* context = NULL;	// 분리된 후 남은 문자열이 들어감
+			char* token = strtok_s(str, ", ", &context);
+
+			// 마지막 행이 반복되는 것 방지위함
+			if (preStr == token) {
+				break;
+			}
+			preStr = token;
+
+			// 읽은 라인을 토큰으로 나누어 벡터에 저장
+			while (token != NULL) {
+				result.push_back(stoi(string(token)));	// string -> int
+				token = strtok_s(NULL, ", ", &context);
+			}
+		}
+	}
+
+	fclose(filePointer);
+	return result;
+}
+
 class BTree {
 public:
 	// 멤버 변수
@@ -145,7 +207,7 @@ public:
 	}
 
 	// 인자로 받은 rootBID와 depth를 btree.bin 파일 header 부분에 다시 작성
-	void setHeader(int rootBID, int depth) {
+	void writeHeader(int rootBID, int depth) {
 		FILE* fp = fopen(this->fileName, "r+b");	// 파일을 binary 형태로 읽고 쓸 수 있도록 open
 
 		// rootBID가 있는 곳으로 커서 이동
@@ -186,51 +248,61 @@ public:
 
 	// 삽입
 	bool insert(int key, int rid) {
+		// leafNode에 추가 할 dataEntry 생성
+		DataEntry* newDataEntry = new DataEntry(key, rid);
+
 		// 트리가 비어있으면 루트노드 생성
   		if (this->header.rootBID == 0) {
 			this->header.rootBID = 1;	// 새로 생성 시 루트 BID = 1
 			makeNewNode(this->header.rootBID);	// 새로운 노드(루트) 생성
-			setHeader(this->header.rootBID, this->header.depth);	// btree 헤더 내용 수정
+			writeHeader(this->header.rootBID, this->header.depth);	// btree 헤더 내용 수정
 		}
 
-		// searchKey를 포함하는 leafNode를 찾아 dataEntry추가, key기준 오름차순 정렬 -> split 필요 확인
-		stack<int> routeBID = searchRoute(key);
-		int updateBID = routeBID.top();
+		// searchKey를 포함하는 leafNode를 탐색
+		stack<int> routeBID = getRoute(key);
+		int updateBID = routeBID.top();	// leafNode의 Key는 stack에 top에 존재
 		routeBID.pop();
 
+		// leafNode에 새로 생성한 dataEntry추가, key기준 오름차순 정렬->split 필요 확인
    		LeafNode* leafNode = getLeaf(updateBID);
-		DataEntry* newDataEntry = new DataEntry(key, rid);
 		leafNode->dataEntries.push_back(newDataEntry);
 		sort(leafNode->dataEntries.begin(), leafNode->dataEntries.end(), compLeafNode);
 
-		// split필요한 경우
-		if (isLeafNodeFull(leafNode)) {
-			// leafNode가 꽉 차면 leafNode split진행 --> nonLeafNode에 새로운 block insert 필요
+		// split필요하지 않은 경우
+		if (!isLeafNodeFull(leafNode)) {
+			// split이 필요하지 않으면 이미 정렬된 상태이기 때문에 바로 rewrite하고 종료
+			rewriteLeafNode(updateBID, leafNode);
+			return true;
+		}
+		else {
+			// leafNode가 꽉 차면 leafNode split진행 --> nonLeafNode에 새로운 indexDentry insert 필요
 			IndexEntry* newIndexEntry = leafNodeSplit(leafNode, updateBID);
 
-			// 부모 노드도 split이 필요한지 root까지 올라가면서 확인하는 작업
+			// 부모 노드도 split이 필요한지 root까지 올라가면서 확인
 			while (true) {
 				// 부모 노드가 없을경우 부모 생성 후 종료
 				if (routeBID.empty()) {
+					// nonLeafNode 생성 (루트 노드)
+					NonLeafNode* parentNode = new NonLeafNode();
+
 					int parentBID = getTotalBlockCount() + 1;
 					makeNewNode(parentBID);
-					this->header.depth = this->header.depth + 1;	// 부모 노드 추가 시 depth + 1
-					this->header.rootBID = parentBID;	// 부모 노드 추가 시 depth + 1
-					setHeader(parentBID, this->header.depth);	// 부모 노드 추가 시 rootNodeBID변경
-					
-					
-					// nonLeafNode 생성
-					NonLeafNode* parentNode = new NonLeafNode();
 					parentNode->NextLevelBID = updateBID;	// NextLevelBID는 split이후 왼쪽 노드를 가리킴
 					parentNode->indexEntries.push_back(newIndexEntry);	// split이후 오른쪽 노드로부터 만들어진 IndexEntry를 추가
 
+					this->header.depth = this->header.depth + 1;	// 부모 노드 추가 시 depth + 1
+					this->header.rootBID = parentBID;	// 부모 노드 추가 시 depth + 1
+					writeHeader(parentBID, this->header.depth);	// 부모 노드 추가 시 rootNodeBID변경
+
+					// NonLeafNode write후 종료
 					rewriteNonLeafNode(parentBID, parentNode);
 					break;
 				}
 				// 부모가 있는 경우 2가지
-				// 1. 부모에 자리가 없어서 다시 split이 일어나는 경우
-				// 2. 부모에 자리가 있어서 삽입 가능한 경우
+				// 1. 부모에 자리가 있어서 삽입 가능한 경우
+				// 2. 부모에 자리가 없어서 다시 split이 일어나는 경우
 				else {
+					// 부모노드의 BID
 					int parentBID = routeBID.top();
 					routeBID.pop();
 
@@ -240,23 +312,21 @@ public:
 					sort(parentNonLeafNode->indexEntries.begin(), parentNonLeafNode->indexEntries.end(), compNonLeafNode);
 
 					// 1. 부모에 자리가 없어서 다시 split이 일어나는 경우
-					if (isNonLeafNodeFull(parentNonLeafNode)) {
-						// split 이후 새로 생기는 IndexEntry
-						newIndexEntry = nonLeafNodeSplit(parentNonLeafNode, parentBID);
-						updateBID = parentBID;
-					}
-					// 2. 부모에 자리가 있어서 삽입 가능한 경우
-					else {
+					if (!isNonLeafNodeFull(parentNonLeafNode)) {
+						// 부모 노드를 다시 파일에 write -> 종료(split 전파 X)
 						rewriteNonLeafNode(parentBID, parentNonLeafNode);
 						break;
 					}
+					// 2. 부모에 자리가 있어서 삽입 가능한 경우
+					else {
+						// split 이후 새로 생기는 IndexEntry
+						newIndexEntry = nonLeafNodeSplit(parentNonLeafNode, parentBID);
+
+						// 수정할 노드는 부모노드임으로 updateBID 변경
+						updateBID = parentBID;
+					}
 				}
 			}
-		}
-		else {
-			// split이 필요하지 않으면 이미 정렬된 상태이기 때문에 바로 rewrite
-			rewriteLeafNode(updateBID, leafNode);
-			return true;
 		}
 		return true;
 	}
@@ -282,10 +352,8 @@ public:
 
 		// 원래 leaf에서 새로 생긴 leaf로 우측 데이터 복사
 		for (int i = left; i < originLeafNode->dataEntries.size(); i++) {
-			int key = originLeafNode->dataEntries[i]->key;
-			int value = originLeafNode->dataEntries[i]->value;
 
-			DataEntry* newDataEntry = new DataEntry(key, value);
+			DataEntry* newDataEntry = new DataEntry(originLeafNode->dataEntries[i]->key, originLeafNode->dataEntries[i]->value);
 			newLeafNode->dataEntries.push_back(newDataEntry);
 		}
 
@@ -315,10 +383,8 @@ public:
 
 		// 원래 nonLeafNode에서 새로 생긴 nonLeafNode로 데이터 복사 (우측 절반 - 1)
 		for (int i = left + 1; i < originNonLeafNode->indexEntries.size(); i++) {
-			int key = originNonLeafNode->indexEntries[i]->key;
-			int bid = originNonLeafNode->indexEntries[i]->BID;
 
-			IndexEntry* newIndexEntry = new IndexEntry(key, bid);
+			IndexEntry* newIndexEntry = new IndexEntry(originNonLeafNode->indexEntries[i]->key, originNonLeafNode->indexEntries[i]->BID);
 			newNonLeafNode->indexEntries.push_back(newIndexEntry);
 		}
 
@@ -356,12 +422,9 @@ public:
 
 		// leafNode의 dataEntry write
 		for (int i = 0; i < leafNode->dataEntries.size(); i++) {
-			int key = leafNode->dataEntries[i]->key;
-			int value = leafNode->dataEntries[i]->value;
-
 			// file에 write
-			fwrite(&key, sizeof(int), 1, fp);
-			fwrite(&value, sizeof(int), 1, fp);
+			fwrite(&leafNode->dataEntries[i]->key, sizeof(int), 1, fp);
+			fwrite(&leafNode->dataEntries[i]->value, sizeof(int), 1, fp);
 		}
 
 		// leafNode의 nextLeafNode 위치로 이동
@@ -400,12 +463,9 @@ public:
 
 		// nonLeafNode의 indexEntry write
 		for (int i = 0; i < nonLeafNode->indexEntries.size(); i++) {
-			int key = nonLeafNode->indexEntries[i]->key;
-			int BID = nonLeafNode->indexEntries[i]->BID;
-
 			// file에 write
-			fwrite(&key, sizeof(int), 1, fp);
-			fwrite(&BID, sizeof(int), 1, fp);
+			fwrite(&nonLeafNode->indexEntries[i]->key, sizeof(int), 1, fp);
+			fwrite(&nonLeafNode->indexEntries[i]->BID, sizeof(int), 1, fp);
 		}
 
 		// leafNode의 nextLeafNode 위치로 이동
@@ -415,8 +475,8 @@ public:
 	}
 
 	// searchKey를 통해 block search
-	//  --> searchKey 범위를 가지고 있는 block를 찾아가는 route의 BID리턴
-	stack<int> searchRoute(int searchKey) {
+	//  --> searchKey 범위를 가지고 있는 block을 찾아가는 route의 BID리턴
+	stack<int> getRoute(int searchKey) {
 		stack<int> result;
 		int curBID = this->header.rootBID;
 		int totalDepth = this->header.depth;
@@ -428,31 +488,33 @@ public:
 			NonLeafNode* curNonLeafNode = getNonLeaf(curBID);	// BID를 가지고 NonLeafNode 읽어옴
 			bool searchFlag = false;
 
+			int size = curNonLeafNode->indexEntries.size();
 			// NonLeafNode : [nextBID, (key, value), (key, value)...]
-			for (int i = 0; i < curNonLeafNode->indexEntries.size(); i++) {
-				int nextBID = 0;
+			for (int i = 0; i < size; i++) {
 				int nextKey = 0;
+				int nextBID = 0;
 
 				// i == 0인 경우 nextBID는 NonLeafNode의 NextLevelBID
 				if (i == 0) {
+					nextKey = curNonLeafNode->indexEntries[0]->key;
 					nextBID = curNonLeafNode->NextLevelBID;
-					nextKey = curNonLeafNode->indexEntries.front()->key;
 				}
 				// i != 0인 경우 nextBID는 NonLeafNode->indexEntries[i-1]->BID
+				// i != 0인 경우 nextKey는 NonLeafNode->indexEntries[i]->key
 				else {
-					nextBID = curNonLeafNode->indexEntries[i - 1]->BID;
 					nextKey = curNonLeafNode->indexEntries[i]->key;
+					nextBID = curNonLeafNode->indexEntries[i - 1]->BID;
 				}
 
 				// searchKey가 더 작으면 왼쪽 BID 사용 & 현재 노드 탐색 종료
 				if (searchKey < nextKey) {
-					curBID = nextBID;
 					curDepth++;
 					searchFlag = true;
+					curBID = nextBID;
 					result.push(curBID);
 					break;
 				}
-				// searchKey가 더 크면 오른쪽으로 이동
+				// searchKey가 더 크면 노드에서 오른쪽으로 이동
 			}
 			// 현재 노드에서 못찾았으면 가장 우측의 BID로 이동
 			if (searchFlag == false) {
@@ -465,19 +527,6 @@ public:
 		return result;
 	}
 
-	// 파일에 데이터 write
-	void writeData(int BID, int key, int value) {
-		FILE* fp = fopen(this->fileName, "r+b");	// 파일을 binary 형태로 읽고 쓸 수 있도록 open
-
-		// 처음부터 block의 시작 위치까지 커서 이동
-		int blockOffset = getBlockOffset(BID);
-		fseek(fp, blockOffset, SEEK_SET);
-
-		fwrite(&key, sizeof(int), 1, fp);
-		fwrite(&value, sizeof(int), 1, fp);
-
-		fclose(fp);
-	}
 
 	// Node에 Entry는 (blockSize - 4) / 8 개 만큼 들어갈 수 있음
 	// true면 split 필요
@@ -507,16 +556,18 @@ public:
 		fread(buffer, sizeof(int), bufferSize, fp);
 
 		LeafNode* leafNode = new LeafNode();
-		
+		// 다음 leafNode를 가리키는 BID는 buffer 맨 마지막에 존재함
+		leafNode->nextLeafNode = buffer[bufferSize - 1];
+
 		for (int i = 0; i < bufferSize - 1; i=i+2) {
 			// buffer에 0이 있으면 데이터가 없는 것
 
+			// 있는 데이터만 담도록 함
 			if (buffer[i] != 0) {
 				DataEntry* dataEntry = new DataEntry(buffer[i], buffer[i + 1]);
 				leafNode->dataEntries.push_back(dataEntry);
 			}
 		}
-		leafNode->nextLeafNode = buffer[bufferSize - 1];
 
 		fclose(fp);
 
@@ -592,7 +643,7 @@ public:
 		LeafNode* leafNode;
 		NonLeafNode* nonLeafNode;
 		
-		// depth가 2인 경우 level1노드는 leafNode
+		// depth가 1인 경우 level1노드는 leafNode
 		if (this->header.depth == 1) {
 			for (int i = 0; i < rootNode->indexEntries.size(); i++) {
 				// i가 첫 번째면 nextBID는 nonLeafNode가 가지고 있는 BID
@@ -611,7 +662,7 @@ public:
 				}
 			}
 		}
-		// 2보다 깊은 경우 level1노드는 nonLeafNode
+		// 1보다 깊은 경우 level1노드는 nonLeafNode
 		else if (this->header.depth > 1) {
 			for (int i = 0; i < rootNode->indexEntries.size() + 1; i++) {
 				// i가 첫 번째면 nextBID는 nonLeafNode가 가지고 있는 BID
@@ -623,9 +674,13 @@ public:
 				}
 
 				nonLeafNode = getNonLeaf(nextBID);
-				for (int i = 0; i < nonLeafNode->indexEntries.size(); i++) {
-					int key = nonLeafNode->indexEntries[i]->key;
-					fputs(to_string(key).c_str(), fp);
+				for (int j = 0; j < nonLeafNode->indexEntries.size(); j++) {
+					fputs(to_string(nonLeafNode->indexEntries[j]->key).c_str(), fp);
+
+					// 마지막 "," 출력 안되도록 분기
+					if (i == rootNode->indexEntries.size() && j == nonLeafNode->indexEntries.size() - 1) {
+						continue;
+					}
 					fputs(comma.c_str(), fp);
 				}
 			}
@@ -642,7 +697,7 @@ public:
 		fp = fopen(writeFileName.c_str(), "a+b");
 
 		LeafNode* leafNode = new LeafNode();
-		stack<int> routeBID = searchRoute(searchKey);	// key를 이용하여 root부터 leaf까지 BID를 가진 스택 리턴
+		stack<int> routeBID = getRoute(searchKey);	// key를 이용하여 root부터 leaf까지 BID를 가진 스택 리턴
 
 		// 가장 마지막에 있는 원소가 leafNode의 BID
 		int leafNodeKey = routeBID.top();
@@ -679,7 +734,7 @@ public:
 		fp = fopen(writeFileName.c_str(), "a+b");
 
 		LeafNode* leafNode = new LeafNode();
-		stack<int> routeBID = searchRoute(startRange);	// key를 이용하여 root부터 leaf까지 BID를 가진 스택 리턴
+		stack<int> routeBID = getRoute(startRange);	// key를 이용하여 root부터 leaf까지 BID를 가진 스택 리턴
 
 		// 가장 마지막에 있는 원소가 leafNode의 BID
 		int leafNodeKey = routeBID.top();
@@ -694,9 +749,7 @@ public:
 		string enter = "\n";
 		string slash = " / ";
 		
-		bool stopFlag = true;
-
-		while (stopFlag) {
+		while (true) {
 			// 현재 리프노드에서 탐색
 			// leafNode의 DataEntry의 key와 startRange를 비교해가면서 startRange보다 큰 값이 나오면 파일에 바로 write (없는 키 값이 있을 수 있음)
 			for (int i = 0; i < leafNode->dataEntries.size(); i++) {
@@ -708,7 +761,6 @@ public:
 				
 				// endPoint보다 작지만 startPoint보다 크면 파일에 write
 				if (startRange <= leafNode->dataEntries[i]->key) {
-					
 					key = leafNode->dataEntries[i]->key;
 					value = leafNode->dataEntries[i]->value;
 
@@ -722,8 +774,6 @@ public:
 			int nextBID = leafNode->nextLeafNode;	
 			leafNode = getLeaf(nextBID);
 		}
-		
-
 		fclose(fp);
 	}
 
@@ -762,93 +812,24 @@ public:
 	
 };
 
-vector<int> readFile(string readFileName, char command) {
-	FILE* filePointer = fopen(readFileName.c_str(), "r");
-	if (filePointer == NULL) {
-		cout << "File Error from readFile" << '\n';
-		exit(1);
-	}
-
-	char str[100];
-	string preStr;	// 마지막 행이 반복되는 것 방지위함
-	vector<int> result;	
-
-	// point search는 한 라인에 하나의 숫자가 있어 분할 필요 X
-	if (command == 's') {
-		while (feof(filePointer) == 0) {
-			fgets(str, 100, filePointer);
-
-			// 개행문자 제거
-			if (str[strlen(str) - 1] == '\n') {
-				str[strlen(str) - 1] = '\0';
-			}
-
-			// 입력이 없으면 종료
-			if (str[0] == '\0') {
-				break;
-			}
-
-			// 읽은 라인을 벡터에 저장
-			result.push_back(stoi(string(str)));	// string -> int
-		}
-	}
-	// range search와 insertion은 한 라인에 두 개의 숫자가 있어 분할 필요
-	else {
-		// 파일 포인터가 파일의 끝이 아닐 때 계속 반복
-		while (feof(filePointer) == 0) {
-			fgets(str, 100, filePointer);
-
-			// 개행문자 제거
-			if (str[strlen(str) - 1] == '\n') {
-				str[strlen(str) - 1] = '\0';
-			}
-
-			char* context = NULL;	// 분리된 후 남은 문자열이 들어감
-			char* token = strtok_s(str, ", ", &context);
-
-			// 마지막 행이 반복되는 것 방지위함
-			if (preStr == token) {
-				break;
-			}
-			preStr = token;
-
-			// 읽은 라인을 토큰으로 나누어 벡터에 저장
-			while (token != NULL) {
-				result.push_back(stoi(string(token)));	// string -> int
-				token = strtok_s(NULL, ", ", &context);
-			}
-		}
-	}
-
-	fclose(filePointer);
-	return result;
-}
-
-
-
-// input example
-// 1. btree.exe		c	btree.bin		36
-// 2. btree.exe		i	btree.bin		insert.txt
-// 3. btree.exe		s	btree.bin		search.txt		output.txt
-// 4. btree.exe		r	btree.bin		rangesearch.txt output.txt
-// 5. btree.exe		p	btree.bin		input.txt		output.txt
-//	[0]		[1]		[2]		[3]		[4] 
 int main(int argc, char* argv[]) {
 	char command = argv[1][0];
-	const char* fileName = argv[2];	// btree.bin
-	vector<int> data;	// 읽어온 데이터를 저장할 벡터
+	string fileName = argv[2];	// btree.bin
 	string readFileName = "";		// read할 파일명
 	string writeFileName = "";		// search 결과를 적을 파일명
+	
+	vector<int> data;	// 읽어온 데이터를 저장할 벡터
 
 	int blockSize = 0;
-	BTree* myBTree = new BTree(fileName);
+	BTree* myBTree = new BTree(fileName.c_str());
 
 	switch (command) {
 	case 'c':
 		// create index file
 		blockSize = stoi(string(argv[3]));	// argv로부터 blockSize 가져오기
-		myBTree->creation(fileName, blockSize);
+		myBTree->creation(fileName.c_str(), blockSize);
 		break;
+
 	case 'i':
 		// insert records from [records data file], ex) records.txt
 		readFileName = argv[3];
